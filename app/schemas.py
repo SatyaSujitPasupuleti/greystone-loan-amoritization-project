@@ -32,3 +32,9 @@ class LoanRead(LoanBase):
     user_id: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class LoanScheduleItem(BaseModel):
+    month: int
+    remaining_balance: float
+    monthly_payment: float
