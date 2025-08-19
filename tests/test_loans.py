@@ -3,11 +3,15 @@ from decimal import Decimal, ROUND_HALF_UP
 import pytest
 
 
+# Helper: create a user and return its id
+
 def _create_user(client: TestClient, username: str, email: str) -> int:
     r = client.post("/users", json={"username": username, "email": email})
     assert r.status_code == 201, r.text
     return r.json()["id"]
 
+
+# Helper: create a loan and return its id
 
 def _create_loan(client: TestClient, owner_id: int, amount=10000.0, rate=6.0, term=12) -> int:
     r = client.post(
@@ -22,6 +26,8 @@ def _create_loan(client: TestClient, owner_id: int, amount=10000.0, rate=6.0, te
     assert r.status_code == 201, r.text
     return r.json()["id"]
 
+
+# Happy path: can create one loan and retrieve it via list and get-by-id
 
 def test_create_and_list_loans(client: TestClient):
     owner_id = _create_user(client, "owner", "owner@example.com")
@@ -39,6 +45,8 @@ def test_create_and_list_loans(client: TestClient):
     assert data["user_id"] == owner_id
 
 
+# Validates schedule endpoint returns term-length array with expected fields
+
 def test_schedule_length_and_fields(client: TestClient):
     owner_id = _create_user(client, "s1", "s1@example.com")
     loan_id = _create_loan(client, owner_id, amount=1200.0, rate=0.0, term=12)
@@ -50,6 +58,8 @@ def test_schedule_length_and_fields(client: TestClient):
     first = schedule[0]
     assert set(first.keys()) == {"month", "remaining_balance", "monthly_payment"}
 
+
+# Validates summary endpoint input range and basic outputs at month 0 and mid-term
 
 def test_summary_validations_and_values(client: TestClient):
     owner_id = _create_user(client, "s2", "s2@example.com")
@@ -73,6 +83,8 @@ def test_summary_validations_and_values(client: TestClient):
     assert d5["current_principal_balance"] >= 0.0
 
 
+# Sharing: duplicate share is rejected; cannot share to owner
+
 def test_share_same_user_twice_errors(client: TestClient):
     owner_id = _create_user(client, "share_owner", "share_owner@example.com")
     other_id = _create_user(client, "share_viewer", "share_viewer@example.com")
@@ -88,6 +100,8 @@ def test_share_same_user_twice_errors(client: TestClient):
     r3 = client.post(f"/loans/{loan_id}/share", json={"user_id": owner_id})
     assert r3.status_code == 400
 
+
+# Summary: parameter validation (missing, negative, over term, wrong type)
 
 def test_summary_month_param_validation(client: TestClient):
     owner_id = _create_user(client, "sumv", "sumv@example.com")
@@ -110,6 +124,8 @@ def test_summary_month_param_validation(client: TestClient):
     assert r_str.status_code == 422
 
 
+# Zero-interest loan: principal paid and remaining are linear over time, no interest paid
+
 def test_summary_zero_interest_linear_behavior(client: TestClient):
     owner_id = _create_user(client, "zeroi", "zeroi@example.com")
     amount = Decimal("1200.0")
@@ -127,6 +143,8 @@ def test_summary_zero_interest_linear_behavior(client: TestClient):
     assert Decimal(str(d6["total_interest_paid"])) == Decimal("0.00")
 
 
+# Schedule: term=0 rejected; valid schedule has constant payment, non-increasing balances, and ends at 0
+
 def test_schedule_term_validation_and_monotonicity(client: TestClient):
     owner_id = _create_user(client, "schedv", "schedv@example.com")
 
@@ -143,7 +161,7 @@ def test_schedule_term_validation_and_monotonicity(client: TestClient):
     payments = [Decimal(str(row["monthly_payment"])) for row in schedule]
     balances = [Decimal(str(row["remaining_balance"])) for row in schedule]
 
-    assert all(abs(pay - payments[0]) < Decimal("0.000001") for pay in payments)
+    assert all(pay == payments[0] for pay in payments)
     # Non-increasing balances
     assert all(balances[i] <= balances[i - 1] + Decimal("0.000000001") for i in range(1, len(balances)))
     # Last balance should be zero (clamped)
@@ -152,14 +170,18 @@ def test_schedule_term_validation_and_monotonicity(client: TestClient):
 
 # --------------- Happy path tests ---------------
 
+# Helper: round Decimal to cents (banker's rounding per endpoint)
+
 def _to_cents(d: Decimal) -> Decimal:
     return d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+# Helper: build expected amortization path matching endpoint logic and rounding rules
+
 def _expected_amortization(principal: float, annual_rate: float, term_months: int):
     """Yield tuples of (month_index, payment, interest, principal_payment, remaining)
-    Uses the same rounding approach as the summary endpoint: payment rounded to cents,
-    interest per month rounded to cents, principal = payment - interest, clamp final.
+    Uses the same rounding approach as the summary/schedule endpoints: payment rounded to cents,
+    interest per month rounded to cents, principal = payment - interest, clamp/adjust on final month.
     """
     P = Decimal(str(principal))
     r = Decimal(str(annual_rate)) / Decimal("100") / Decimal("12")
@@ -175,6 +197,7 @@ def _expected_amortization(principal: float, annual_rate: float, term_months: in
         interest = Decimal("0") if r == 0 else _to_cents(remaining * r)
         principal_paid = payment - interest
         if m == n:
+            # Final month: exact payoff and adjust interest so payment = principal + interest
             principal_paid = remaining
             interest = payment - principal_paid
         if principal_paid > remaining:
@@ -182,6 +205,8 @@ def _expected_amortization(principal: float, annual_rate: float, term_months: in
         remaining = remaining - principal_paid
         yield m, payment, interest, principal_paid, remaining
 
+
+# Schedule happy path: monthly payment matches formula and balance ends at 0.00
 
 def test_schedule_happy_path_matches_payment_formula(client: TestClient):
     owner_id = _create_user(client, "schedhappy", "schedhappy@example.com")
@@ -203,6 +228,8 @@ def test_schedule_happy_path_matches_payment_formula(client: TestClient):
     # Final remaining balance ~ 0
     assert Decimal(str(schedule[-1]["remaining_balance"])) == Decimal("0.00")
 
+
+# Summary happy path: summary values match amortization at month 1/mid/term
 
 def test_summary_happy_path_matches_amortization(client: TestClient):
     owner_id = _create_user(client, "sumhappy", "sumhappy@example.com")
@@ -238,7 +265,7 @@ def test_summary_happy_path_matches_amortization(client: TestClient):
     assert Decimal(str(d_final["total_principal_paid"])) == _to_cents(Decimal(str(amount)))
 
 
-# --------------- Financial accuracy (parametrized) ---------------
+# Financial accuracy (parametrized): verify final totals at term match amortization results
 
 @pytest.mark.parametrize(
     "amount, rate, term",
@@ -249,6 +276,7 @@ def test_summary_happy_path_matches_amortization(client: TestClient):
         (9999.99, 9.99, 48),
     ],
 )
+
 def test_financial_accuracy_final_totals(client: TestClient, amount, rate, term):
     owner_id = _create_user(client, f"fin_{amount}_{rate}_{term}", f"fin_{amount}_{rate}_{term}@example.com")
     loan_id = _create_loan(client, owner_id, amount=amount, rate=rate, term=term)
@@ -260,7 +288,7 @@ def test_financial_accuracy_final_totals(client: TestClient, amount, rate, term)
 
     amort = list(_expected_amortization(amount, rate, term))
     total_interest_expected = _to_cents(sum(row[2] for row in amort))  # Decimal
-
+    
     # Principal paid equals original principal
     assert Decimal(str(summary["total_principal_paid"])) == _to_cents(Decimal(str(amount)))
     # Remaining is zero
@@ -268,6 +296,8 @@ def test_financial_accuracy_final_totals(client: TestClient, amount, rate, term)
     # Interest equals expected amortized interest
     assert Decimal(str(summary["total_interest_paid"])) == total_interest_expected
 
+
+# Payment consistency: sum of monthly payments equals principal + total interest (to the cent)
 
 @pytest.mark.parametrize(
     "amount, rate, term",
@@ -277,6 +307,7 @@ def test_financial_accuracy_final_totals(client: TestClient, amount, rate, term)
         (8000.0, 3.2, 60),
     ],
 )
+
 def test_financial_accuracy_payment_consistency(client: TestClient, amount, rate, term):
     owner_id = _create_user(client, f"pay_{amount}_{rate}_{term}", f"pay_{amount}_{rate}_{term}@example.com")
     loan_id = _create_loan(client, owner_id, amount=amount, rate=rate, term=term)
@@ -287,10 +318,10 @@ def test_financial_accuracy_payment_consistency(client: TestClient, amount, rate
 
     final_summary = client.get(f"/loans/{loan_id}/summary", params={"month": term}).json()
     expected_total = Decimal(str(amount)) + Decimal(str(final_summary["total_interest_paid"]))
+    assert total_paid == expected_total
 
-    # Allow tiny rounding differences (<= 10 cents across full term)
-    assert abs(total_paid - expected_total) <= Decimal("0.10")
 
+# Identity check: for any month, total_principal_paid + current_principal_balance == original principal (to cents)
 
 def test_financial_identity_by_month(client: TestClient):
     amount = Decimal("54321.0")
@@ -304,3 +335,4 @@ def test_financial_identity_by_month(client: TestClient):
         # principal_paid + remaining == original principal (to cents)
         total = Decimal(str(data["total_principal_paid"])) + Decimal(str(data["current_principal_balance"]))
         assert total == _to_cents(amount)
+

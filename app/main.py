@@ -1,3 +1,9 @@
+"""FastAPI application for managing users and loans with amortization utilities.
+
+This module exposes endpoints to create and read users and loans, compute loan
+schedules, and summarize loan balances. Financial math uses Decimal with
+cent-level rounding for accuracy.
+"""
 from typing import List
 
 from fastapi import FastAPI, Depends, HTTPException, status
@@ -7,25 +13,26 @@ from decimal import Decimal, ROUND_HALF_UP, getcontext
 from . import models, schemas
 from .database import engine, get_db
 
-# Create tables on startup (simple dev setup)
+# Create tables on startup (simple dev setup).
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Loan Amori API")
 
-# High precision for intermediate Decimal math
+# Use high precision for intermediate Decimal math.
 getcontext().prec = 28
 
 
 def _to_cents(value: Decimal) -> Decimal:
+    """Return value rounded to cents using ROUND_HALF_UP."""
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def _compute_monthly_payment(principal: Decimal, monthly_rate: Decimal, term_months: int) -> Decimal:
-    """Compute fixed monthly payment M for an amortizing loan.
+    """Compute the fixed monthly payment for an amortizing loan.
 
     If r = monthly_rate and n = term_months, principal P:
-      - If r == 0: M = P / n
-      - Else:     M = P * [ r (1+r)^n / ((1+r)^n - 1) ]
+    - If r == 0: M = P / n
+    - Else:     M = P * [ r (1+r)^n / ((1+r)^n - 1) ]
     """
     if monthly_rate == 0:
         return _to_cents(principal / Decimal(term_months))
@@ -37,12 +44,12 @@ def _compute_monthly_payment(principal: Decimal, monthly_rate: Decimal, term_mon
 def _amortization_state_at_month(
     principal: Decimal, monthly_rate: Decimal, term_months: int, month: int
 ) -> tuple[Decimal, Decimal, Decimal]:
-    """Return (remaining_balance, total_principal_paid, total_interest_paid) after `month` payments.
+    """Return remaining, total principal paid, and total interest paid after `month` payments.
 
-    Per-period interest = remaining * r (rounded to cents). Principal paid = payment - interest.
-    Remaining balance decreases by principal paid each month, clamped to zero at maturity.
-    On the final month (i == term_months), principal payment is forced to clear remaining,
-    and interest is adjusted so that payment = principal + interest (ensuring zero balance).
+    Per-period interest equals remaining * r, rounded to cents. Principal paid
+    equals payment minus interest. On the final month, principal is forced to
+    clear the remaining balance and interest is adjusted so payment equals
+    principal plus interest.
     """
     monthly_payment = _compute_monthly_payment(principal, monthly_rate, term_months)
 
@@ -62,9 +69,7 @@ def _amortization_state_at_month(
         principal_payment = monthly_payment - interest
 
         if i == term_months:
-            # Final period: payoff whatever remains exactly
             principal_payment = remaining
-            # Adjust interest so that payment = principal + interest
             interest = monthly_payment - principal_payment
 
         if principal_payment > remaining:
@@ -80,10 +85,7 @@ def _amortization_state_at_month(
 def current_principal_balance_at_month(
     principal: Decimal, monthly_rate: Decimal, term_months: int, month: int
 ) -> Decimal:
-    """Current remaining principal after `month` payments.
-
-    Computed via amortization evolution with per-period rounding to cents.
-    """
+    """Return the remaining principal after `month` payments, rounded to cents."""
     remaining, _, _ = _amortization_state_at_month(principal, monthly_rate, term_months, month)
     return _to_cents(remaining)
 
@@ -91,10 +93,7 @@ def current_principal_balance_at_month(
 def total_principal_paid_at_month(
     principal: Decimal, monthly_rate: Decimal, term_months: int, month: int
 ) -> Decimal:
-    """Aggregate principal paid by end of `month`.
-
-    Sum of monthly (payment - interest), with interest rounded to cents per period.
-    """
+    """Return the aggregate principal paid by the end of `month`, rounded to cents."""
     _, total_principal_paid, _ = _amortization_state_at_month(principal, monthly_rate, term_months, month)
     return _to_cents(total_principal_paid)
 
@@ -102,10 +101,7 @@ def total_principal_paid_at_month(
 def total_interest_paid_at_month(
     principal: Decimal, monthly_rate: Decimal, term_months: int, month: int
 ) -> Decimal:
-    """Aggregate interest paid by end of `month`.
-
-    Sum of monthly interest = remaining * r, rounded to cents per period.
-    """
+    """Return the aggregate interest paid by the end of `month`, rounded to cents."""
     _, _, total_interest_paid = _amortization_state_at_month(principal, monthly_rate, term_months, month)
     return _to_cents(total_interest_paid)
 
@@ -113,6 +109,7 @@ def total_interest_paid_at_month(
 # User endpoints
 @app.post("/users", response_model=schemas.UserRead, status_code=status.HTTP_201_CREATED)
 def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    """Create a new user with a unique username and email."""
     existing = (
         db.query(models.User)
         .filter((models.User.username == user.username) | (models.User.email == user.email))
@@ -130,11 +127,13 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
 
 @app.get("/users", response_model=List[schemas.UserRead])
 def list_users(db: Session = Depends(get_db)):
+    """Return all users."""
     return db.query(models.User).all()
 
 
 @app.get("/users/{user_id}/loans", response_model=List[schemas.LoanRead])
 def list_loans_for_user(user_id: int, db: Session = Depends(get_db)):
+    """Return all loans owned by a specific user."""
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -144,6 +143,7 @@ def list_loans_for_user(user_id: int, db: Session = Depends(get_db)):
 # Loan endpoints
 @app.post("/loans", response_model=schemas.LoanRead, status_code=status.HTTP_201_CREATED)
 def create_loan(loan: schemas.LoanCreate, db: Session = Depends(get_db)):
+    """Create a new loan for the specified owner."""
     user = db.query(models.User).filter(models.User.id == loan.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -157,11 +157,13 @@ def create_loan(loan: schemas.LoanCreate, db: Session = Depends(get_db)):
 
 @app.get("/loans", response_model=List[schemas.LoanRead])
 def list_loans(db: Session = Depends(get_db)):
+    """Return all loans."""
     return db.query(models.Loan).all()
 
 
 @app.get("/loans/{loan_id}", response_model=schemas.LoanRead)
 def get_loan(loan_id: int, db: Session = Depends(get_db)):
+    """Return a single loan by id including shared user ids."""
     loan = db.query(models.Loan).filter(models.Loan.id == loan_id).first()
     if not loan:
         raise HTTPException(status_code=404, detail="Loan not found")
@@ -177,6 +179,7 @@ def get_loan(loan_id: int, db: Session = Depends(get_db)):
 
 @app.post("/loans/{loan_id}/share", response_model=schemas.LoanRead)
 def share_loan(loan_id: int, payload: schemas.LoanShareRequest, db: Session = Depends(get_db)):
+    """Grant another user read-only access to an existing loan."""
     loan = db.query(models.Loan).filter(models.Loan.id == loan_id).first()
     if not loan:
         raise HTTPException(status_code=404, detail="Loan not found")
@@ -208,6 +211,7 @@ def share_loan(loan_id: int, payload: schemas.LoanShareRequest, db: Session = De
 
 @app.get("/loans/{loan_id}/schedule", response_model=List[schemas.LoanScheduleItem])
 def get_loan_schedule(loan_id: int, db: Session = Depends(get_db)):
+    """Return the amortization schedule with monthly payment and remaining balance."""
     loan = db.query(models.Loan).filter(models.Loan.id == loan_id).first()
     if not loan:
         raise HTTPException(status_code=404, detail="Loan not found")
@@ -246,6 +250,7 @@ def get_loan_schedule(loan_id: int, db: Session = Depends(get_db)):
 
 @app.get("/loans/{loan_id}/summary", response_model=schemas.LoanSummary)
 def get_loan_summary(loan_id: int, month: int, db: Session = Depends(get_db)):
+    """Return remaining principal, total principal, and total interest paid at a given month."""
     loan = db.query(models.Loan).filter(models.Loan.id == loan_id).first()
     if not loan:
         raise HTTPException(status_code=404, detail="Loan not found")
