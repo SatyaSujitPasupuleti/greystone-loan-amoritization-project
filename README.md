@@ -1,6 +1,6 @@
 # Loan Amori API
 
-Simple FastAPI project using SQLAlchemy and SQLite.
+Loan Amortization Project
 
 ## Setup
 
@@ -73,7 +73,8 @@ Adding OAUTH2, currently there is no authentication for users as I operated unde
 Adding Admins/ Administrative Endpoints
 Adding Ability to pay loans by users 
 Adding Acceptance Tests
-Adding CI/CD using Github Actions 
+Adding CI/CD using Github Actions / Jenkins
 Adding linter to enforce PEP8 Standards / Pre-commit hook
 Adding further code documentation
+Adding real PRs 
 
