@@ -1,6 +1,6 @@
 # Loan Amori API
 
-Simple FastAPI project using SQLAlchemy and SQLite.
+Developed Loan Amortization API using Fast API with the primary target being precision of the loan amortization by using Decimal over float
 
 ## Setup
 
@@ -92,13 +92,13 @@ pytest -q
 - Financial tests use Decimal arithmetic and assert cent-accurate results.
 
 ## Improvements
-- Adding OAUTH2, currently there is no authentication for users as I operated under the assumption that the loan logic was the focus of this exercise 
+- Adding OAUTH2, currently there is no authentication for users or for any admins
 - Adding Admins/ Administrative Endpoints
 - Adding Ability to pay loans by users 
 - Adding Acceptance Tests
 - Adding CI/CD using Github Actions / Jenkins
 - Adding linter to enforce PEP8 Standards / Pre-commit hook to enforce linting standards/commit logging standards
 - Adding further code documentation
-- Adding real PRs 
+- Adding real PRs and branch protection
 
 
