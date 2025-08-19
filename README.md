@@ -45,7 +45,10 @@ uvicorn app.main:app --reload
 
 ## Financial formulas and rounding
 
-- **Monthly rate**: $r = \dfrac{\text{annual\_interest\_rate}}{100 \cdot 12}$
+- **Monthly rate**: 
+```math
+r = \dfrac{\text{annual\_interest\_rate}}{100 \cdot 12}
+```
 - **Fixed monthly payment** (if $r > 0$):
 
 ```math
