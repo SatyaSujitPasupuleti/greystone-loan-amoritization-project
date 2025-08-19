@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, EmailStr, ConfigDict
 
 
@@ -30,6 +30,7 @@ class LoanCreate(LoanBase):
 class LoanRead(LoanBase):
     id: int
     user_id: int
+    shared_user_ids: Optional[List[int]] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -44,3 +45,7 @@ class LoanSummary(BaseModel):
     current_principal_balance: float
     total_principal_paid: float
     total_interest_paid: float
+
+
+class LoanShareRequest(BaseModel):
+    user_id: int

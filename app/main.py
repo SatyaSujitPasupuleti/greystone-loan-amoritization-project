@@ -146,6 +146,52 @@ def list_loans(db: Session = Depends(get_db)):
     return db.query(models.Loan).all()
 
 
+@app.get("/loans/{loan_id}", response_model=schemas.LoanRead)
+def get_loan(loan_id: int, db: Session = Depends(get_db)):
+    loan = db.query(models.Loan).filter(models.Loan.id == loan_id).first()
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
+    return schemas.LoanRead(
+        id=loan.id,
+        user_id=loan.user_id,
+        amount=loan.amount,
+        annual_interest_rate=loan.annual_interest_rate,
+        loan_term_in_months=loan.loan_term_in_months,
+        shared_user_ids=[u.id for u in loan.shared_users],
+    )
+
+
+@app.post("/loans/{loan_id}/share", response_model=schemas.LoanRead)
+def share_loan(loan_id: int, payload: schemas.LoanShareRequest, db: Session = Depends(get_db)):
+    loan = db.query(models.Loan).filter(models.Loan.id == loan_id).first()
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
+
+    user_to_share = db.query(models.User).filter(models.User.id == payload.user_id).first()
+    if not user_to_share:
+        raise HTTPException(status_code=404, detail="User to share with not found")
+
+    if user_to_share.id == loan.user_id:
+        raise HTTPException(status_code=400, detail="Owner already has access to this loan")
+
+    if user_to_share in loan.shared_users:
+        raise HTTPException(status_code=400, detail="Loan already shared with this user")
+
+    loan.shared_users.append(user_to_share)
+    db.add(loan)
+    db.commit()
+    db.refresh(loan)
+
+    return schemas.LoanRead(
+        id=loan.id,
+        user_id=loan.user_id,
+        amount=loan.amount,
+        annual_interest_rate=loan.annual_interest_rate,
+        loan_term_in_months=loan.loan_term_in_months,
+        shared_user_ids=[u.id for u in loan.shared_users],
+    )
+
+
 @app.get("/loans/{loan_id}/schedule", response_model=List[schemas.LoanScheduleItem])
 def get_loan_schedule(loan_id: int, db: Session = Depends(get_db)):
     loan = db.query(models.Loan).filter(models.Loan.id == loan_id).first()
