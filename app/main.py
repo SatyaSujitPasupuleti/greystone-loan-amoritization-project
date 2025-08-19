@@ -41,6 +41,8 @@ def _amortization_state_at_month(
 
     Per-period interest = remaining * r (rounded to cents). Principal paid = payment - interest.
     Remaining balance decreases by principal paid each month, clamped to zero at maturity.
+    On the final month (i == term_months), principal payment is forced to clear remaining,
+    and interest is adjusted so that payment = principal + interest (ensuring zero balance).
     """
     monthly_payment = _compute_monthly_payment(principal, monthly_rate, term_months)
 
@@ -51,11 +53,23 @@ def _amortization_state_at_month(
     if month <= 0:
         return remaining, total_principal_paid, total_interest_paid
 
-    for _ in range(month):
-        interest = Decimal("0") if monthly_rate == 0 else _to_cents(remaining * monthly_rate)
+    for i in range(1, month + 1):
+        if monthly_rate == 0:
+            interest = Decimal("0")
+        else:
+            interest = _to_cents(remaining * monthly_rate)
+
         principal_payment = monthly_payment - interest
+
+        if i == term_months:
+            # Final period: payoff whatever remains exactly
+            principal_payment = remaining
+            # Adjust interest so that payment = principal + interest
+            interest = monthly_payment - principal_payment
+
         if principal_payment > remaining:
             principal_payment = remaining
+
         remaining = remaining - principal_payment
         total_interest_paid += interest
         total_principal_paid += principal_payment
@@ -198,36 +212,32 @@ def get_loan_schedule(loan_id: int, db: Session = Depends(get_db)):
     if not loan:
         raise HTTPException(status_code=404, detail="Loan not found")
 
-    principal = loan.amount
     n = loan.loan_term_in_months
-    r_monthly = loan.annual_interest_rate / 100.0 / 12.0
-
     if n <= 0:
         raise HTTPException(status_code=400, detail="Loan term must be positive")
 
-    if r_monthly == 0:
-        monthly_payment = principal / n
-    else:
-        # Standard amortization monthly payment formula: see _compute_monthly_payment
-        monthly_payment = principal * (r_monthly * (1 + r_monthly) ** n) / ((1 + r_monthly) ** n - 1)
+    P = Decimal(str(loan.amount))
+    r_monthly = Decimal(str(loan.annual_interest_rate)) / Decimal("100") / Decimal("12")
+    monthly_payment = _compute_monthly_payment(P, r_monthly, n)
 
     schedule: List[schemas.LoanScheduleItem] = []
-    remaining = principal
+    remaining = P
 
-    for month in range(1, n + 1):
-        if r_monthly == 0:
-            interest = 0.0
-        else:
-            interest = remaining * r_monthly
+    for i in range(1, n + 1):
+        interest = Decimal("0") if r_monthly == 0 else _to_cents(remaining * r_monthly)
         principal_payment = monthly_payment - interest
-        # Prevent negative remaining balance in last payment due to rounding
-        remaining = max(0.0, remaining - principal_payment)
+        if i == n:
+            principal_payment = remaining
+            interest = monthly_payment - principal_payment
+        if principal_payment > remaining:
+            principal_payment = remaining
+        remaining = remaining - principal_payment
 
         schedule.append(
             schemas.LoanScheduleItem(
-                month=month,
-                remaining_balance=round(remaining, 2),
-                monthly_payment=round(monthly_payment, 2),
+                month=i,
+                remaining_balance=float(_to_cents(remaining)),
+                monthly_payment=float(monthly_payment),
             )
         )
 
