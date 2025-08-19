@@ -9,9 +9,21 @@ from typing import List
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from decimal import Decimal, ROUND_HALF_UP, getcontext
+import logging
 
 from . import models, schemas
 from .database import engine, get_db
+
+# Configure module logger.
+logger = logging.getLogger("loan_amori")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        fmt="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 # Create tables on startup (simple dev setup).
 models.Base.metadata.create_all(bind=engine)
@@ -110,63 +122,86 @@ def total_interest_paid_at_month(
 @app.post("/users", response_model=schemas.UserRead, status_code=status.HTTP_201_CREATED)
 def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
     """Create a new user with a unique username and email."""
+    logger.info("POST /users - creating user username=%s email=%s", user.username, user.email)
     existing = (
         db.query(models.User)
         .filter((models.User.username == user.username) | (models.User.email == user.email))
         .first()
     )
     if existing:
+        logger.info("POST /users - conflict for username=%s or email=%s", user.username, user.email)
         raise HTTPException(status_code=400, detail="Username or email already exists")
 
     db_user = models.User(**user.model_dump())
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
+    logger.info("POST /users - created user id=%s", db_user.id)
     return db_user
 
 
 @app.get("/users", response_model=List[schemas.UserRead])
 def list_users(db: Session = Depends(get_db)):
     """Return all users."""
-    return db.query(models.User).all()
+    users = db.query(models.User).all()
+    logger.info("GET /users - returned count=%s", len(users))
+    return users
 
 
 @app.get("/users/{user_id}/loans", response_model=List[schemas.LoanRead])
 def list_loans_for_user(user_id: int, db: Session = Depends(get_db)):
     """Return all loans owned by a specific user."""
+    logger.info("GET /users/%s/loans - listing", user_id)
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
+        logger.info("GET /users/%s/loans - user not found", user_id)
         raise HTTPException(status_code=404, detail="User not found")
-    return db.query(models.Loan).filter(models.Loan.user_id == user_id).all()
+    loans = db.query(models.Loan).filter(models.Loan.user_id == user_id).all()
+    logger.info("GET /users/%s/loans - returned count=%s", user_id, len(loans))
+    return loans
 
 
 # Loan endpoints
 @app.post("/loans", response_model=schemas.LoanRead, status_code=status.HTTP_201_CREATED)
 def create_loan(loan: schemas.LoanCreate, db: Session = Depends(get_db)):
     """Create a new loan for the specified owner."""
+    logger.info(
+        "POST /loans - creating loan user_id=%s amount=%s rate=%s term=%s",
+        loan.user_id,
+        loan.amount,
+        loan.annual_interest_rate,
+        loan.loan_term_in_months,
+    )
     user = db.query(models.User).filter(models.User.id == loan.user_id).first()
     if not user:
+        logger.info("POST /loans - owner user_id=%s not found", loan.user_id)
         raise HTTPException(status_code=404, detail="User not found")
 
     db_loan = models.Loan(**loan.model_dump())
     db.add(db_loan)
     db.commit()
     db.refresh(db_loan)
+    logger.info("POST /loans - created loan id=%s", db_loan.id)
     return db_loan
 
 
 @app.get("/loans", response_model=List[schemas.LoanRead])
 def list_loans(db: Session = Depends(get_db)):
     """Return all loans."""
-    return db.query(models.Loan).all()
+    loans = db.query(models.Loan).all()
+    logger.info("GET /loans - returned count=%s", len(loans))
+    return loans
 
 
 @app.get("/loans/{loan_id}", response_model=schemas.LoanRead)
 def get_loan(loan_id: int, db: Session = Depends(get_db)):
     """Return a single loan by id including shared user ids."""
+    logger.info("GET /loans/%s - fetching", loan_id)
     loan = db.query(models.Loan).filter(models.Loan.id == loan_id).first()
     if not loan:
+        logger.info("GET /loans/%s - not found", loan_id)
         raise HTTPException(status_code=404, detail="Loan not found")
+    logger.info("GET /loans/%s - found", loan_id)
     return schemas.LoanRead(
         id=loan.id,
         user_id=loan.user_id,
@@ -180,24 +215,30 @@ def get_loan(loan_id: int, db: Session = Depends(get_db)):
 @app.post("/loans/{loan_id}/share", response_model=schemas.LoanRead)
 def share_loan(loan_id: int, payload: schemas.LoanShareRequest, db: Session = Depends(get_db)):
     """Grant another user read-only access to an existing loan."""
+    logger.info("POST /loans/%s/share - sharing with user_id=%s", loan_id, payload.user_id)
     loan = db.query(models.Loan).filter(models.Loan.id == loan_id).first()
     if not loan:
+        logger.info("POST /loans/%s/share - loan not found", loan_id)
         raise HTTPException(status_code=404, detail="Loan not found")
 
     user_to_share = db.query(models.User).filter(models.User.id == payload.user_id).first()
     if not user_to_share:
+        logger.info("POST /loans/%s/share - user_id=%s not found", loan_id, payload.user_id)
         raise HTTPException(status_code=404, detail="User to share with not found")
 
     if user_to_share.id == loan.user_id:
+        logger.info("POST /loans/%s/share - cannot share to owner user_id=%s", loan_id, payload.user_id)
         raise HTTPException(status_code=400, detail="Owner already has access to this loan")
 
     if user_to_share in loan.shared_users:
+        logger.info("POST /loans/%s/share - already shared to user_id=%s", loan_id, payload.user_id)
         raise HTTPException(status_code=400, detail="Loan already shared with this user")
 
     loan.shared_users.append(user_to_share)
     db.add(loan)
     db.commit()
     db.refresh(loan)
+    logger.info("POST /loans/%s/share - now shared_count=%s", loan_id, len(loan.shared_users))
 
     return schemas.LoanRead(
         id=loan.id,
@@ -212,17 +253,28 @@ def share_loan(loan_id: int, payload: schemas.LoanShareRequest, db: Session = De
 @app.get("/loans/{loan_id}/schedule", response_model=List[schemas.LoanScheduleItem])
 def get_loan_schedule(loan_id: int, db: Session = Depends(get_db)):
     """Return the amortization schedule with monthly payment and remaining balance."""
+    logger.info("GET /loans/%s/schedule - computing schedule", loan_id)
     loan = db.query(models.Loan).filter(models.Loan.id == loan_id).first()
     if not loan:
+        logger.info("GET /loans/%s/schedule - loan not found", loan_id)
         raise HTTPException(status_code=404, detail="Loan not found")
 
     n = loan.loan_term_in_months
     if n <= 0:
+        logger.info("GET /loans/%s/schedule - invalid term=%s", loan_id, n)
         raise HTTPException(status_code=400, detail="Loan term must be positive")
 
     P = Decimal(str(loan.amount))
     r_monthly = Decimal(str(loan.annual_interest_rate)) / Decimal("100") / Decimal("12")
     monthly_payment = _compute_monthly_payment(P, r_monthly, n)
+    logger.info(
+        "GET /loans/%s/schedule - amount=%s rate=%s term=%s monthly_payment=%s",
+        loan_id,
+        P,
+        r_monthly,
+        n,
+        monthly_payment,
+    )
 
     schedule: List[schemas.LoanScheduleItem] = []
     remaining = P
@@ -245,20 +297,25 @@ def get_loan_schedule(loan_id: int, db: Session = Depends(get_db)):
             )
         )
 
+    logger.info("GET /loans/%s/schedule - generated rows=%s", loan_id, len(schedule))
     return schedule
 
 
 @app.get("/loans/{loan_id}/summary", response_model=schemas.LoanSummary)
 def get_loan_summary(loan_id: int, month: int, db: Session = Depends(get_db)):
     """Return remaining principal, total principal, and total interest paid at a given month."""
+    logger.info("GET /loans/%s/summary - month=%s", loan_id, month)
     loan = db.query(models.Loan).filter(models.Loan.id == loan_id).first()
     if not loan:
+        logger.info("GET /loans/%s/summary - loan not found", loan_id)
         raise HTTPException(status_code=404, detail="Loan not found")
 
     n = loan.loan_term_in_months
     if n <= 0:
+        logger.info("GET /loans/%s/summary - invalid term=%s", loan_id, n)
         raise HTTPException(status_code=400, detail="Loan term must be positive")
     if month < 0 or month > n:
+        logger.info("GET /loans/%s/summary - invalid month=%s (term=%s)", loan_id, month, n)
         raise HTTPException(status_code=400, detail=f"month must be between 0 and {n}")
 
     P = Decimal(str(loan.amount))
@@ -267,6 +324,14 @@ def get_loan_summary(loan_id: int, month: int, db: Session = Depends(get_db)):
     remaining = current_principal_balance_at_month(P, r_monthly, n, month)
     total_principal = total_principal_paid_at_month(P, r_monthly, n, month)
     total_interest = total_interest_paid_at_month(P, r_monthly, n, month)
+
+    logger.info(
+        "GET /loans/%s/summary - remaining=%s principal_paid=%s interest_paid=%s",
+        loan_id,
+        remaining,
+        total_principal,
+        total_interest,
+    )
 
     return schemas.LoanSummary(
         current_principal_balance=float(remaining),
