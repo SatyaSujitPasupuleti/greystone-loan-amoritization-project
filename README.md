@@ -48,33 +48,33 @@ uvicorn app.main:app --reload
 - **Monthly rate**: $r = \dfrac{\text{annual\_interest\_rate}}{100 \cdot 12}$
 - **Fixed monthly payment** (if $r > 0$):
 
-  $$
-  M = P \cdot \frac{r (1 + r)^n}{(1 + r)^n - 1}
-  $$
+```math
+M = P \cdot \frac{r (1 + r)^n}{(1 + r)^n - 1}
+```
 
 - **Zero-rate monthly payment** (if $r = 0$):
 
-  $$
-  M = \frac{P}{n}
-  $$
+```math
+M = \frac{P}{n}
+```
 
 - **Per-period interest**:
 
-  $$
-  \text{interest}_t = \text{remaining}_{t-1} \cdot r
-  $$
+```math
+\text{interest}_t = \text{remaining}_{t-1} \cdot r
+```
 
 - **Per-period principal**:
 
-  $$
-  \text{principal}_t = M - \text{interest}_t
-  $$
+```math
+\text{principal}_t = M - \text{interest}_t
+```
 
 - **Remaining balance update**:
 
-  $$
-  \text{remaining}_t = \text{remaining}_{t-1} - \text{principal}_t
-  $$
+```math
+\text{remaining}_t = \text{remaining}_{t-1} - \text{principal}_t
+```
 
 - **Final month adjustment**: on month $n$, principal is forced to exactly clear the remaining balance and interest is adjusted so $M = \text{principal}_n + \text{interest}_n$.
 - **Rounding**: all monetary values are computed with Python `Decimal` and rounded to cents using `ROUND_HALF_UP` per period.
@@ -89,6 +89,13 @@ pytest -q
 - Financial tests use Decimal arithmetic and assert cent-accurate results.
 
 ## Improvements
-
+- Adding OAUTH2, currently there is no authentication for users as I operated under the assumption that the loan logic was the focus of this exercise 
+- Adding Admins/ Administrative Endpoints
+- Adding Ability to pay loans by users 
+- Adding Acceptance Tests
+- Adding CI/CD using Github Actions / Jenkins
+- Adding linter to enforce PEP8 Standards / Pre-commit hook to enforce linting standards/commit logging standards
+- Adding further code documentation
+- Adding real PRs 
 
 
